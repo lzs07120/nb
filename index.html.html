@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Merry Christmas</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+  }
+  #stage {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas {
+    display: block;
+    background: #000;
+  }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1600" height="900"></canvas></div>
+<script>
+(function () {
+  "use strict";
+
+  /* ================= 可自定义参数 ================= */
+  var CONFIG = {
+    greeting: "Merry Christmas",  // 第一行文字
+    name: "2026",                 // 第二行文字（原作者的 "647"，换成你的名字即可）
+    rotateSpeed: 0.27,            // 旋转速度（弧度/秒），原版约 0.0045/帧
+    glow: 0.85,                   // 粒子浓度（越大树越实、越亮）
+    pointScale: 1.0               // 粒子大小倍率
+  };
+  /* =============================================== */
+
+  var W = 1600, H = 900, TAU = Math.PI * 2;
+
+  // 粒子数量
+  var TREE_POINTS = 50000;
+  var GROUND_POINTS = 4000;
+  var STAR_POINTS = 1200;
+  var HEART_POINTS = 1000;
+  var SNOW2D_POINTS = 10;
+
+  // 相机参数
+  var CAM_DIST = 13;
+  var CAM_HEIGHT = 6.0;
+  var PITCH = -0.25;
+  var TREE_HEIGHT = 12.0;
+
+  var canvas = document.getElementById("c");
+  var ctx = canvas.getContext("2d", { alpha: false });
+
+  /* ================= 随机工具 ================= */
+  function uniform(a, b) { return a + Math.random() * (b - a); }
+  function randInt(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
+  function gauss() {
+    var u = 1 - Math.random(), v = Math.random();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(TAU * v);
+  }
+
+  /* ================= 生成圣诞树 ================= */
+  function genTreePoints() {
+    var pts = [];
+    var loops = 9;
+    var spiral_n = Math.floor(TREE_POINTS * 0.7);
+
+    // 70% 螺旋灯带 —— 高度分布偏向下半部分
+    for (var i = 0; i < spiral_n; i++) {
+      var u = Math.random();
+      var h = Math.pow(u, 1.6);
+      var y = TREE_HEIGHT * h + 0.2;
+      var base_r = Math.pow(1 - h, 1.1) * 3.2;
+      var branch_wave = Math.max(0, Math.sin((h * 5.8 + 0.15) * TAU));
+      base_r *= 1 + 0.65 * branch_wave;
+      var t = u * loops * TAU;
+      var angle = t + uniform(-0.22, 0.22);
+      var r = base_r * uniform(0.85, 1.08);
+      var x = Math.cos(angle) * r;
+      var z = Math.sin(angle) * r;
+
+      var mid = 1 - Math.abs(h - 0.55) * 1.5;
+      mid = Math.max(0.15, mid);
+      var baseG = 155 + Math.floor(90 * mid);
+      var baseB = 185 + Math.floor(70 * mid);
+      var cr = 255, cg = Math.min(255, baseG + randInt(-15, 20)), cb = Math.min(255, baseB + randInt(-15, 35));
+
+      if (Math.random() < 0.08) {
+        cr = 255;
+        cg = 255 - randInt(0, 35);
+        cb = Math.min(255, 230 + randInt(0, 25));
+      }
+      pts.push(x, y, z, cr, cg, cb);
+    }
+
+    // 30% 随机填充，让轮廓更“毛茸茸”
+    var fill_n = TREE_POINTS - spiral_n;
+    for (var j = 0; j < fill_n; j++) {
+      var hh = Math.pow(Math.random(), 1.9);
+      var yy = TREE_HEIGHT * hh + 0.2 + uniform(-0.08, 0.08);
+      var br = Math.pow(1 - hh, 1.1) * 4.3;
+      var bw = Math.max(0, Math.sin((hh * 5.8 + 0.15) * TAU));
+      br *= 1 + 0.65 * bw;
+      var rr = br * Math.sqrt(Math.random());
+      var aa = Math.random() * TAU;
+      var xx = Math.cos(aa) * rr + uniform(-0.08, 0.08);
+      var zz = Math.sin(aa) * rr + uniform(-0.08, 0.08);
+      pts.push(xx, yy, zz, 255, randInt(165, 225), randInt(190, 250));
+    }
+
+    return new Float32Array(pts);
+  }
+
+  /* ================= 地面光环（法阵盘子） ================= */
+  function genGroundPoints() {
+    var pts = [];
+    var rings = [4.6, 6.0, 7.4, 8.8, 10.2, 11.4];
+    for (var i = 0; i < GROUND_POINTS; i++) {
+      var ring = rings[Math.floor(Math.random() * rings.length)];
+      var r = ring + 0.3 * gauss();
+      var theta = Math.random() * TAU;
+      var x = Math.cos(theta) * r;
+      var z = Math.sin(theta) * r;
+      var y = -0.25;
+      var c = Math.random() < 0.15 ? randInt(235, 255) : randInt(190, 235);
+      pts.push(x, y, z, c, c, 255);
+    }
+    return new Float32Array(pts);
+  }
+
+  /* ================= 空中 3D 小亮点 ================= */
+  function genStarPoints() {
+    var pts = [];
+    for (var i = 0; i < STAR_POINTS; i++) {
+      var x = uniform(-18, 18);
+      var z = uniform(-18, 18);
+      var y = uniform(3, 18);
+      var base = randInt(215, 255);
+      pts.push(x, y, z, base, base, 255);
+    }
+    return new Float32Array(pts);
+  }
+
+  /* ================= 树顶 3D 爱心 ================= */
+  function genHeartPoints() {
+    var pts = [];
+    var scale = 0.9;
+    var top_y = TREE_HEIGHT + 0.05;
+    var guard = 0;
+    while (pts.length < HEART_POINTS * 6 && guard < 400000) {
+      guard++;
+      var x = uniform(-1.3, 1.3);
+      var y = uniform(-1.4, 1.4);
+      var f = Math.pow(x * x + y * y - 1, 3) - x * x * (y * y * y);
+      if (f <= 0) {
+        var wx = x * scale * 0.8;
+        var wy = top_y + (y + 1) * scale * 0.5;
+        var wz = uniform(-0.18, 0.18);
+        var dist = Math.sqrt(x * x + y * y);
+        var factor = Math.max(0.35, 1.15 - 0.5 * dist);
+        var g = Math.max(120, Math.min(255, Math.floor(130 * factor + 80)));
+        var b = Math.max(120, Math.min(255, Math.floor(190 * factor + 70)));
+        pts.push(wx, wy, wz, 255, g, b);
+      }
+    }
+    return new Float32Array(pts);
+  }
+
+  var treePts = genTreePoints();
+  var groundPts = genGroundPoints();
+  var starPts = genStarPoints();
+  var heartPts = genHeartPoints();
+
+  // 合并为一个点云（原地复制，避免每帧多次判断）
+  function merge() {
+    var total = treePts.length + groundPts.length + starPts.length + heartPts.length;
+    var out = new Float32Array(total);
+    var o = 0;
+    out.set(treePts, o); o += treePts.length;
+    out.set(groundPts, o); o += groundPts.length;
+    out.set(starPts, o); o += starPts.length;
+    out.set(heartPts, o); o += heartPts.length;
+    return out;
+  }
+  var POINTS = merge();
+
+  /* ================= 光点核（实心圆点，边缘轻微抗锯齿） ================= */
+  var kernels = {};
+  function buildKernel(R) {
+    var dx = [], dy = [], w = [];
+    for (var yy = -R; yy <= R; yy++) {
+      for (var xx = -R; xx <= R; xx++) {
+        var d = Math.sqrt(xx * xx + yy * yy);
+        var val = R + 0.5 - d;
+        if (val <= 0) continue;
+        if (val > 1) val = 1;
+        dx.push(xx); dy.push(yy); w.push(val);
+      }
+    }
+    return { R: R, dx: Int8Array.from(dx), dy: Int8Array.from(dy), w: Float32Array.from(w), len: w.length };
+  }
+  for (var s = 1; s <= 6; s++) kernels[s] = buildKernel(s);
+
+  /* ================= 像素缓冲（直接在 ImageData 上混色） ================= */
+  var imgData = ctx.createImageData(W, H);
+  var data = imgData.data;               // RGBA
+  var data32 = new Uint32Array(data.buffer);  // 用于整屏填充背景
+
+  function splat(sx, sy, size, r, g, b, alpha) {
+    var K = kernels[size] || kernels[6];
+    var dx = K.dx, dy = K.dy, ww = K.w, len = K.len;
+    for (var k = 0; k < len; k++) {
+      var X = sx + dx[k];
+      var Y = sy + dy[k];
+      if (X < 0 || X >= W || Y < 0 || Y >= H) continue;
+      var idx = (Y * W + X) * 4;
+      var wk = ww[k] * alpha;
+      data[idx] += (r - data[idx]) * wk;
+      data[idx + 1] += (g - data[idx + 1]) * wk;
+      data[idx + 2] += (b - data[idx + 2]) * wk;
+    }
+  }
+
+  /* ================= 前景 2D 大雪花 ================= */
+  function newFlake(f, y) {
+    f[0] = uniform(0, W);
+    f[1] = (y === undefined) ? uniform(-80, -10) : y;
+    f[2] = uniform(10, 16);
+    f[3] = uniform(30, 45);
+    var travel = H + 80 - f[1];
+    f[5] = travel / f[3];
+    f[4] = f[5];
+  }
+  var flakes = [];
+  for (var fi = 0; fi < SNOW2D_POINTS; fi++) {
+    var ff = [0, 0, 0, 0, 0, 0];
+    // 首帧就让雪花散布在整屏，不必等它们从上往下飘满
+    newFlake(ff, uniform(-60, H - 40));
+    flakes.push(ff);
+  }
+
+  function updateSnow(dt) {
+    for (var i = 0; i < flakes.length; i++) {
+      var f = flakes[i];
+      f[1] += f[3] * dt;
+      f[4] -= dt;
+      if (f[4] <= 0 || f[1] > H + 50) newFlake(f);
+    }
+  }
+
+  function drawSnow() {
+    for (var i = 0; i < flakes.length; i++) {
+      var f = flakes[i];
+      if (f[5] <= 0) continue;
+      var phase = f[4] / f[5];
+      var alpha = phase > 0.3 ? 255 : Math.floor(255 * (phase / 0.3));
+      alpha = Math.max(0, Math.min(255, alpha));
+      var cx = f[0], cy = f[1], r = f[2];
+      var layers = [
+        [r * 1.3, alpha / 20],
+        [r * 1.0, alpha / 12],
+        [r * 0.75, alpha / 6],
+        [r * 0.55, alpha / 3],
+        [r * 0.45, alpha]
+      ];
+      for (var L = 0; L < layers.length; L++) {
+        var ra = layers[L][0], al = layers[L][1];
+        if (al < 1 || ra < 0.5) continue;
+        ctx.beginPath();
+        ctx.fillStyle = "rgba(255,255,255," + (al / 255) + ")";
+        ctx.arc(cx, cy, ra, 0, TAU);
+        ctx.fill();
+      }
+    }
+  }
+
+  /* ================= 主循环 ================= */
+  var MAXP = Math.floor(POINTS.length / 6);
+  var sxBuf = new Float32Array(MAXP);
+  var syBuf = new Float32Array(MAXP);
+  var szBuf = new Uint8Array(MAXP);
+  var binBuf = new Uint8Array(MAXP);
+  var srcBuf = new Int32Array(MAXP);
+  var idxBuf = new Int32Array(MAXP);
+  var BINS = 64;
+  var binCount = new Int32Array(BINS);
+  var binOffset = new Int32Array(BINS);
+
+  var angle = 0;
+  var last = performance.now();
+
+  // 单帧绘制：a = 旋转角，dt = 时间步长（供雪花下落使用）
+  function renderFrame(a, dt) {
+    var ca = Math.cos(a), sa = Math.sin(a);
+    var cp = Math.cos(PITCH), sp = Math.sin(PITCH);
+    var alpha = CONFIG.glow;
+    var FOCAL = H * 0.63;
+
+    // 清屏（不透明黑）
+    data32.fill(0xFF000000);
+
+    // 1) 投影 + 按深度分桶（越远越先画，近的粒子覆盖上去）
+    binCount.fill(0);
+    var nPts = 0;
+    var n = POINTS.length;
+    for (var p = 0, pi = 0; p < n; p += 6, pi++) {
+      var x = POINTS[p], y = POINTS[p + 1], z = POINTS[p + 2];
+      var xz = x * ca - z * sa;
+      var zz = x * sa + z * ca;
+      var yp = (y * cp - zz * sp) - CAM_HEIGHT;
+      var zp = (y * sp + zz * cp) + CAM_DIST;
+      if (zp <= 0.1) continue;
+      var f = FOCAL / zp;
+      var sx = Math.round(W * 0.5 + xz * f);
+      var sy = Math.round(H * 0.5 - yp * f);
+      if (sx < -10 || sx > W + 10 || sy < -10 || sy > H + 10) continue;
+      var size = Math.max(1, Math.floor((3.6 - zp * 0.13) * CONFIG.pointScale));
+      if (size > 6) size = 6;
+      var bin = zp >= 16 ? BINS - 1 : Math.floor(zp * 4);
+      if (bin < 0) bin = 0;
+      if (bin >= BINS) bin = BINS - 1;
+      sxBuf[nPts] = sx;
+      syBuf[nPts] = sy;
+      szBuf[nPts] = size;
+      binBuf[nPts] = bin;
+      srcBuf[nPts] = p;
+      binCount[bin]++;
+      nPts++;
+    }
+
+    // 远 → 近 的绘制顺序
+    var off = 0;
+    for (var b = BINS - 1; b >= 0; b--) {
+      binOffset[b] = off;
+      off += binCount[b];
+    }
+    for (var q = 0; q < nPts; q++) {
+      var bb = binBuf[q];
+      idxBuf[binOffset[bb] + (--binCount[bb])] = q;
+    }
+
+    // 2) 绘制
+    for (var o = 0; o < nPts; o++) {
+      var qi = idxBuf[o];
+      var base = srcBuf[qi];
+      splat(sxBuf[qi], syBuf[qi], szBuf[qi], POINTS[base + 3], POINTS[base + 4], POINTS[base + 5], alpha);
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+
+    // 文字
+    ctx.save();
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "#ffffff";
+    ctx.shadowColor = "rgba(150,200,255,0.55)";
+    ctx.shadowBlur = 12;
+    ctx.font = '45px "Monotype Corsiva", "Segoe Script", "Brush Script MT", "Lucida Handwriting", cursive';
+    ctx.fillText(CONFIG.greeting, 40, Math.floor(H / 3));
+    ctx.fillText(CONFIG.name, 40, Math.floor(H / 3) + 45 + 10);
+    ctx.restore();
+
+    // 前景雪花
+    updateSnow(dt);
+    drawSnow();
+  }
+
+  function frame(now) {
+    var dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    angle += CONFIG.rotateSpeed * dt;
+    renderFrame(angle, dt);
+    requestAnimationFrame(frame);
+  }
+
+  /* ================= 自适应窗口 ================= */
+  function fit() {
+    var scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    canvas.style.width = Math.round(W * scale) + "px";
+    canvas.style.height = Math.round(H * scale) + "px";
+  }
+  window.addEventListener("resize", fit);
+  fit();
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
